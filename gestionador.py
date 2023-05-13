@@ -33,7 +33,8 @@ class Direction(Enum):
     RIGHT = 2
     LEFT = 3
 
-unico_juego = 7000
+unico_juego1 = 7000
+unico_juego2 = 7001
 game_categories={}
 game_categories['four_player'] = [Games.HOT_WAY, Games.AIR_BALLONS, Games.SHEEP_PUSHERS, Games.SEA_BATTLE]
 game_categories['two_player'] = [Games.TIE_SHAPING, Games.SEA_BATTLE]
@@ -46,6 +47,7 @@ city_categories = {}
 city_categories['beach'] = cities[:12]
 city_categories['mountain'] = cities[12:24]
 city_categories['snow'] = cities[24:]
+groups = {}
 
 def get_biome_by_city(city):
     if city in city_categories['beach']:
@@ -82,6 +84,17 @@ def get_remaining_time():
 # Create a UDP socket
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
+def find_group(seat):
+    for group in groups:
+        if seat in groups[group]:
+            return group
+
+def send_start_game(seat, game):
+    group = find_group(seat)
+    if game == Games.SEA_BOMBS:
+            message = json.dumps({'game':str(Games.SEA_BOMBS), 'direction':str(groups[group].index(seat))})
+            sock.sendto(message.encode(), pending[seat])
+            playing_progress[seat].pop(0)
 
 def open_socket():
     # Bind the socket to a specific IP address and port
@@ -100,17 +113,22 @@ def wait_recv():
             sock.sendto(message.encode(), address)
             print(f"Sent remaining time to seat {data['seat']}")
         elif data['event'] == Event.MINIGAME_ENDED:
-            print(f"seat {data['seat']} ended his previous minigame, looking for the next one")
-            if len(playing_progress[data['seat']])>0:
-                message = json.dumps({'event':Event.FINISHED_PLAYING})
-                sock.sendto(message.encode(), playing[data['seat']])
-                print(f"seat {data['seat']} has finished all minigames, sending FINISHED_PLAYING event")
-                playing.pop(data['seat'])           
+            print(f"{data['players']} ended their previous minigame, looking for the next one")
+            #group = find_group(data['players'][0])
+            if len(playing_progress[data['players'][0]])>0:
+                for player in data['players']:
+                    message = json.dumps({'event':Event.FINISHED_PLAYING})
+                    sock.sendto(message.encode(), playing[data['player']])
+                    print(f"seat {data['player']} has finished all minigames, sending FINISHED_PLAYING event")
+                    playing.pop(data['player'])           
             else:
-                game = playing_progress[data['seat']].pop(0)
-                message = json.dumps({'game':str(game)})
-                sock.sendto(message.encode(), playing[data['seat']])
-                print(f"Next minigame for {data['seat']} is {game}. Entering minigame")
+                for player in data['players']:
+                    game = playing_progress[data['player']].pop(0)
+                    message = json.dumps({'game':str(game)})
+                    sock.sendto(message.encode(), playing[data['player']])
+                    print(f"Next minigame for {data['player']} is {game}. Entering minigame")
+                message = json.dumps({'event':Event.CREATE, 'players':data['players']})
+                sock.sendto(message.encode(), unico_juego2)
                 
 
 def countdown(name):
@@ -126,17 +144,14 @@ def countdown(name):
         for group in groups:
             for index, player in enumerate(group):
                 playing_progress[player] = queue(games_list)
-                game = playing_progress[player].pop(0)
-                if game == Games.SEA_BOMBS:
-                    message = json.dumps({'game':str(game),
-                                'direction':str(index)})
-                
+                send_start_game(player)
                 sock.sendto(message.encode(), pending[player])
+
         playing = pending.copy()
         pending = {}
         for group in groups:
             message = json.dumps({'event':Event.CREATE, 'players':groups[group]})
-            sock.sendto(message.encode(), unico_juego)
+            sock.sendto(message.encode(), unico_juego1)
 
 def main():
     open_socket()

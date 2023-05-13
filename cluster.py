@@ -2,10 +2,7 @@ from sklearn.cluster import KMeans
 from scipy.spatial.distance import cdist
 from scipy.optimize import linear_sum_assignment
 import numpy as np
-import matplotlib.pyplot as plt
-from fastapi import FastAPI
 
-app = FastAPI()
 
 def getCoord(seat: str):
   column = (ord(seat[0]) -65) if seat[0] < 'D' else (ord(seat[0]) -64.5)
