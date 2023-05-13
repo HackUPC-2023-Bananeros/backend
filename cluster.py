@@ -34,13 +34,13 @@ def get_even_clusters(X, cluster_size):
 
 def cluster(seats: list):
     player_group = {}
-    groups = {}
+    groups_dict = {}
     players = np.array(list(map(getCoord, seats)))
     groups = get_even_clusters(players, 4)
     for player, group in zip(seats, groups):
       player_group[player] = group
     for player in player_group:
-      if player_group[player] not in groups:
-        groups[player_group[player]] = []
-      groups[player_group[player]].append(player)
-    return player_group, groups
+      if player_group[player] not in groups_dict:
+        groups_dict[player_group[player]] = []
+      groups_dict[player_group[player]].append(player)
+    return player_group, groups_dict

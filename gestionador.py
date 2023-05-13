@@ -2,12 +2,13 @@ from datetime import datetime, timedelta
 import socket
 from enum import Enum
 import json
-from multiprocessing import Process
+import threading
 import random
 import cluster
-import queue
+from collections import deque
 
-class Event(Enum):
+
+class Type(Enum):
     CONNECT = 1
     DISCONNECT = 2
     CREATE = 3
@@ -33,8 +34,8 @@ class Direction(Enum):
     RIGHT = 2
     LEFT = 3
 
-unico_juego1 = 7000
-unico_juego2 = 7001
+unico_juego1 = ('localhost', 7000)
+unico_juego2 = ('localhost', 7005)
 game_categories={}
 game_categories['four_player'] = [Games.HOT_WAY, Games.AIR_BALLONS, Games.SHEEP_PUSHERS, Games.SEA_BATTLE]
 game_categories['two_player'] = [Games.TIE_SHAPING, Games.SEA_BATTLE]
@@ -70,12 +71,13 @@ def match_biome(game):
 route = random.sample(cities, 5)
 destination = route[-1]
 
+playing_progress = {}
 playing = {}
 pending = {}
-playing_progress = {}
+
 
 now = datetime.now().timestamp() * 1000
-start_time = now + 2*60*1000
+start_time = now + 1*60*1000
 
 def get_remaining_time():
     now = datetime.now().timestamp() * 1000
@@ -89,75 +91,81 @@ def find_group(seat):
         if seat in groups[group]:
             return group
 
-def send_start_game(seat, game):
+def send_start_game(seat):
     group = find_group(seat)
+    game = playing_progress[seat].pop()
+    game = Games.SEA_BOMBS
     if game == Games.SEA_BOMBS:
-            message = json.dumps({'game':str(Games.SEA_BOMBS), 'direction':str(groups[group].index(seat))})
+            message = json.dumps({'game':str(Games.SEA_BOMBS.value), 'direction':str(groups[group].index(seat))})
             sock.sendto(message.encode(), pending[seat])
-            playing_progress[seat].pop(0)
+
 
 def open_socket():
     # Bind the socket to a specific IP address and port
-    server_address = ('localhost', 6969)
+    server_address = ('172.200.200.1', 7001)
     sock.bind(server_address)
+
 def wait_recv():
+    global pening, playing, playing_progress
     while True:
         # Wait for incoming data
         data, address = sock.recvfrom(4096)
         data = json.loads(data.decode())
-
-        if data['event'] == Event.CONNECT:
-            print(f"Recieved connection from seat {data['seat']}, Registerd playerin queue for next game")
+        if data['type'] == Type.CONNECT.value:
+            print(f"Recieved connection from seat {data['seat']}, Registerd player in queue for next game")
             pending[data['seat']] = address
+            print(list(pending.keys()))
             message = json.dumps({'time':str(get_remaining_time())})
             sock.sendto(message.encode(), address)
             print(f"Sent remaining time to seat {data['seat']}")
-        elif data['event'] == Event.MINIGAME_ENDED:
+        elif data['type'] == Type.MINIGAME_ENDED.value:
             print(f"{data['players']} ended their previous minigame, looking for the next one")
             #group = find_group(data['players'][0])
             if len(playing_progress[data['players'][0]])>0:
                 for player in data['players']:
-                    message = json.dumps({'event':Event.FINISHED_PLAYING})
+                    message = json.dumps({'type':Type.FINISHED_PLAYING.value})
                     sock.sendto(message.encode(), playing[data['player']])
-                    print(f"seat {data['player']} has finished all minigames, sending FINISHED_PLAYING event")
+                    print(f"seat {data['player']} has finished all minigames, sending FINISHED_PLAYING type")
                     playing.pop(data['player'])           
             else:
                 for player in data['players']:
-                    game = playing_progress[data['player']].pop(0)
+                    game = playing_progress[data['player']].pop()
                     message = json.dumps({'game':str(game)})
                     sock.sendto(message.encode(), playing[data['player']])
                     print(f"Next minigame for {data['player']} is {game}. Entering minigame")
-                message = json.dumps({'event':Event.CREATE, 'players':data['players']})
+                message = json.dumps({'type':Type.CREATE.value, 'players':data['players']})
                 sock.sendto(message.encode(), unico_juego2)
                 
 
-def countdown(name):
+def countdown():
+    global pending, playing, groups
     while True:
-        while(get_remaining_time > 0 or len(playing) > 0):
+        while(get_remaining_time() > 0 or len(playing) > 0 or len(pending) == 0):
             pass
         now = datetime.now().timestamp() * 1000
         start_time = now + 2*60*1000
         games_list = list(random.sample(game_categories['four_player'], len(game_categories['four_player']))) + list(random.sample(game_categories['two_player'], len(game_categories['two_player']))) + list(random.sample(game_categories['single_player'], len(game_categories['single_player'])))
         games_list = list(filter(match_biome, games_list))
         games_list = games_list[:len(route)]
-        player_group, groups = cluster.cluster(pending.keys())
+        print(list(pending.keys()))
+        player_group, groups = cluster.cluster(list(pending.keys()))
         for group in groups:
-            for index, player in enumerate(group):
-                playing_progress[player] = queue(games_list)
+            for player in groups[group]:
+                playing_progress[player] = deque(games_list)
                 send_start_game(player)
-                sock.sendto(message.encode(), pending[player])
 
         playing = pending.copy()
         pending = {}
         for group in groups:
-            message = json.dumps({'event':Event.CREATE, 'players':groups[group]})
+            message = json.dumps({'type':Type.CREATE.value, 'players':groups[group]})
             sock.sendto(message.encode(), unico_juego1)
 
 def main():
     open_socket()
 
-    p = Process(target=countdown)
+    p = threading.Thread(target=countdown)
     p.start()
+    wait_recv()
     p.join()
 
 if __name__ == '__main__':
