@@ -35,11 +35,15 @@ def get_even_clusters(X, cluster_size):
     return clusters
 
 
-@app.post("/group")
-async def cluster(seats: list):
+def cluster(seats: list):
     player_group = {}
+    groups = {}
     players = np.array(list(map(getCoord, seats)))
     groups = get_even_clusters(players, 4)
     for player, group in zip(seats, groups):
       player_group[player] = group
-    return player_group
+    for player in player_group:
+      if player_group[player] not in groups:
+        groups[player_group[player]] = []
+      groups[player_group[player]].append(player)
+    return player_group, groups
