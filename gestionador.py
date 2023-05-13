@@ -5,11 +5,15 @@ import json
 from multiprocessing import Process
 import random
 import cluster
+import queue
 
 class Event(Enum):
     CONNECT = 1
     DISCONNECT = 2
     CREATE = 3
+    MINIGAME_ENDED = 4
+    FINISHED_PLAYING = 5
+
 
 class Games(Enum):
     OBSTACLES = 0
@@ -17,9 +21,9 @@ class Games(Enum):
     PAPERPLANES = 2
     ROPE_CLIMBERS = 3
     SEA_BATTLE = 4
-    TIE_SHAPPING = 5
+    TIE_SHAPING = 5
     SEA_BOMBS = 6
-    SHIPS_PUSHERS = 7
+    SHEEP_PUSHERS = 7
     AIR_BALLONS = 8
     HOT_WAY = 9
 
@@ -30,14 +34,43 @@ class Direction(Enum):
     LEFT = 3
 
 unico_juego = 7000
+game_categories={}
+game_categories['four_player'] = [Games.HOT_WAY, Games.AIR_BALLONS, Games.SHEEP_PUSHERS, Games.SEA_BATTLE]
+game_categories['two_player'] = [Games.TIE_SHAPING, Games.SEA_BATTLE]
+game_categories['single_player'] = [Games.ROPE_CLIMBERS, Games.PAPERPLANES, Games.CATCH_THE_BALL, Games.OBSTACLES]
+game_categories['beach'] = [Games.SEA_BOMBS, Games.SEA_BATTLE]
+game_categories['mountain'] = [Games.SHEEP_PUSHERS, Games.ROPE_CLIMBERS]
+game_categories['snow'] = [Games.HOT_WAY]
+cities = ["Berlín", "Düsseldorf", "Fráncfort", "Hamburgo", "Hanóver", "Múnich", "Nuremberg", "Stuttgart", "Argel", "Viena", "Bruselas", "Sal", "Lárnaca", "Dubrovnik", "Split", "Zagreb", "Billund", "Copenhague", "El Cairo", "A Coruña", "Alicante", "Almería", "Asturias", "Barcelona", "Bilbao", "Fuerteventura", "Gran Canaria", "Granada", "Ibiza", "Jerez", "La Palma", "Lanzarote", "Logroño", "Madrid", "Málaga", "Mallorca", "Menorca", "Pamplona", "Reus", "San Sebastián", "Santander", "Santiago", "Sevilla", "Tenerife", "Valencia", "Valladolid", "Vigo", "Zaragoza", "Bastia", "Burdeos", "Lyon", "Marsella", "Nantes", "Niza", "París", "Toulouse", "Banjul", "Atenas", "Corfú", "Creta", "Mikonos", "Santorini", "Zante", "Budapest", "Cork", "Dublín", "Shannon", "Reikiavik", "Tel Aviv", "Alguer", "Bari", "Bolonia", "Cagliari", "Catania", "Florencia", "Génova", "Lampedusa", "Milán", "Nápoles", "Olbia", "Palermo", "Roma", "Turín", "Venecia", "Amán", "Beirut", "Malta", "Agadir", "Casablanca", "Marrakech", "Tánger", "Bergen", "Oslo", "Ámsterdam", "Faro", "Lisboa", "Madeira", "Oporto", "Ponta Delgada", "Birmingham", "Cardiff", "Edimburgo", "Londres", "Manchester", "Praga", "Dakar", "Estocolmo", "Gotemburgo", "Basilea", "Ginebra", "Zúrich", "Túnez"]
+city_categories = {}
+city_categories['beach'] = cities[:12]
+city_categories['mountain'] = cities[12:24]
+city_categories['snow'] = cities[24:]
 
-four_player_games = [Games.HOT_WAY, Games.AIR_BALLONS, Games.SHIPS_PUSHERS, Games.SEA_BATTLE]
-two_player_games = [Games.TIE_SHAPPING, Games.SEA_BATTLE]
-single_player_games = [Games.ROPE_CLIMBERS, Games.PAPERPLANES, Games.CATCH_THE_BALL, Games.OBSTACLES]
+def get_biome_by_city(city):
+    if city in city_categories['beach']:
+        return 'beach'
+    if city in city_categories['mountain']:
+        return 'mountain'
+    if city in city_categories['snow']:
+        return 'snow'
 
+def match_biome(game):
+    destination_biome = get_biome_by_city(destination)
+    for biome in city_categories:
+        if biome == destination_biome:
+            if game in game_categories[biome]:
+                return True
+        else:
+            if game in game_categories[biome]:
+                return False
+    return True
+route = random.sample(cities, 5)
+destination = route[-1]
 
 playing = {}
 pending = {}
+playing_progress = {}
 
 now = datetime.now().timestamp() * 1000
 start_time = now + 2*60*1000
@@ -60,26 +93,50 @@ def wait_recv():
         data, address = sock.recvfrom(4096)
         data = json.loads(data.decode())
 
-        if data['type'] == Event.CONNECT:
+        if data['event'] == Event.CONNECT:
+            print(f"Recieved connection from seat {data['seat']}, Registerd playerin queue for next game")
             pending[data['seat']] = address
             message = json.dumps({'time':str(get_remaining_time())})
             sock.sendto(message.encode(), address)
+            print(f"Sent remaining time to seat {data['seat']}")
+        elif data['event'] == Event.MINIGAME_ENDED:
+            print(f"seat {data['seat']} ended his previous minigame, looking for the next one")
+            if len(playing_progress[data['seat']])>0:
+                message = json.dumps({'event':Event.FINISHED_PLAYING})
+                sock.sendto(message.encode(), playing[data['seat']])
+                print(f"seat {data['seat']} has finished all minigames, sending FINISHED_PLAYING event")
+                playing.pop(data['seat'])           
+            else:
+                game = playing_progress[data['seat']].pop(0)
+                message = json.dumps({'game':str(game)})
+                sock.sendto(message.encode(), playing[data['seat']])
+                print(f"Next minigame for {data['seat']} is {game}. Entering minigame")
+                
 
 def countdown(name):
-    while(get_remaining_time > 0):
-        pass
-    game = random.choice(four_player_games)
-    player_group, groups = cluster.cluster(pending.keys())
-    for group in groups:
-        for index, player in enumerate(group):
-            if game == Games.SEA_BOMBS:
-                message = json.dumps({'game':str(game),
-                           'direction':str(index)})
-            
-            sock.sendto(message.encode(), pending[player])
-    for group in groups:
-        message = json.dumps({'event':Event.CREATE, 'players':groups[group]})
-        sock.sendto(message.encode(), unico_juego)
+    while True:
+        while(get_remaining_time > 0 or len(playing) > 0):
+            pass
+        now = datetime.now().timestamp() * 1000
+        start_time = now + 2*60*1000
+        games_list = list(random.sample(game_categories['four_player'], len(game_categories['four_player']))) + list(random.sample(game_categories['two_player'], len(game_categories['two_player']))) + list(random.sample(game_categories['single_player'], len(game_categories['single_player'])))
+        games_list = list(filter(match_biome, games_list))
+        games_list = games_list[:len(route)]
+        player_group, groups = cluster.cluster(pending.keys())
+        for group in groups:
+            for index, player in enumerate(group):
+                playing_progress[player] = queue(games_list)
+                game = playing_progress[player].pop(0)
+                if game == Games.SEA_BOMBS:
+                    message = json.dumps({'game':str(game),
+                                'direction':str(index)})
+                
+                sock.sendto(message.encode(), pending[player])
+        playing = pending.copy()
+        pending = {}
+        for group in groups:
+            message = json.dumps({'event':Event.CREATE, 'players':groups[group]})
+            sock.sendto(message.encode(), unico_juego)
 
 def main():
     open_socket()
