@@ -6,6 +6,8 @@ import threading
 import random
 import cluster
 from collections import deque
+from FlightRadar24.api import FlightRadar24API
+import sqlite3
 
 
 class Type(Enum):
@@ -33,6 +35,56 @@ class Direction(Enum):
     DOWN = 1
     RIGHT = 2
     LEFT = 3
+
+def get_plane():
+    fr_api = FlightRadar24API()
+    airlines = fr_api.get_airlines()
+    airlines = fr_api.get_airlines()
+    for airline in airlines:
+        if airline['Name']=='Vueling':
+            airlines = airline
+    airline_icao = airlines['ICAO']
+    thy_flights = fr_api.get_flights(airline = airline_icao)[7]
+    details = fr_api.get_flight_details(thy_flights.id)
+    thy_flights.set_flight_details(details)
+
+    return thy_flights.registration
+
+def get_flight(plane):
+    fr_api = FlightRadar24API()
+    airlines = fr_api.get_airlines()
+    airlines = fr_api.get_airlines()
+    for airline in airlines:
+        if airline['Name']=='Vueling':
+            airlines = airline
+    airline_icao = airlines['ICAO']
+    thy_flights = fr_api.get_flights(airline = airline_icao)
+    for flight in thy_flights:
+        details = fr_api.get_flight_details(flight.id)
+        flight.set_flight_details(details)
+        if flight.registration == plane:
+            return flight.origin_airport_name, flight.destination_airport_name
+        
+def get_seat(ip):
+    import sqlite3
+
+    try:
+        sqliteConnection = sqlite3.connect('data.db')
+        cursor = sqliteConnection.cursor()
+        print("Database created and Successfully Connected to SQLite")
+
+        sqlite_select_Query = f"""SELECT seat from requests WHERE ip_address='{ip}'"""
+        cursor.execute(sqlite_select_Query)
+        record = cursor.fetchall()
+        cursor.close()
+
+    except sqlite3.Error as error:
+        print("Error while connecting to sqlite", error)
+    finally:
+        if sqliteConnection:
+            sqliteConnection.close()
+            print("The SQLite connection is closed")
+        return record
 
 unico_juego1 = ('localhost', 7000)
 unico_juego2 = ('localhost', 7005)
@@ -68,12 +120,13 @@ def match_biome(game):
             if game in game_categories[biome]:
                 return False
     return True
-route = random.sample(cities, 5)
-destination = route[-1]
+
 
 playing_progress = {}
 playing = {}
 pending = {}
+pending_seats = {}
+playing_seats = {}
 
 
 now = datetime.now().timestamp() * 1000
@@ -97,12 +150,13 @@ def send_start_game(seat):
     game = Games.SEA_BOMBS
     if game == Games.SEA_BOMBS:
             message = json.dumps({'game':str(Games.SEA_BOMBS.value), 'direction':str(groups[group].index(seat))})
-            sock.sendto(message.encode(), pending[seat])
+            sock.sendto(message.encode(), pending_seats[seat])
 
 
 def open_socket():
     # Bind the socket to a specific IP address and port
-    server_address = ('172.200.200.1', 7001)
+    server_address = ('localhost', 7008)
+
     sock.bind(server_address)
 
 def wait_recv():
@@ -113,32 +167,34 @@ def wait_recv():
         data = json.loads(data.decode())
         if data['type'] == Type.CONNECT.value:
             print(f"Recieved connection from seat {data['seat']}, Registerd player in queue for next game")
-            pending[data['seat']] = address
+            pending[data[address[0]]] = get_seat(address[0])
+            pending_seats[pending[data[address[0]]]] = address
             print(list(pending.keys()))
             message = json.dumps({'time':str(get_remaining_time())})
             sock.sendto(message.encode(), address)
-            print(f"Sent remaining time to seat {data['seat']}")
+            print(f"Sent remaining time to seat {pending[data[address[0]]]}")
         elif data['type'] == Type.MINIGAME_ENDED.value:
             print(f"{data['players']} ended their previous minigame, looking for the next one")
             #group = find_group(data['players'][0])
-            if len(playing_progress[data['players'][0]])>0:
+            if len(playing_progress[playing[data['players'][0]]])>0:
                 for player in data['players']:
                     message = json.dumps({'type':Type.FINISHED_PLAYING.value})
-                    sock.sendto(message.encode(), playing[data['player']])
+                    sock.sendto(message.encode(), playing_seats[playing[player]])
                     print(f"seat {data['player']} has finished all minigames, sending FINISHED_PLAYING type")
-                    playing.pop(data['player'])           
+                    playing_seats.pop(playing[player])   
+                    playing.pop(player)        
             else:
                 for player in data['players']:
-                    game = playing_progress[data['player']].pop()
+                    game = playing_progress[pending[player]].pop()
                     message = json.dumps({'game':str(game)})
-                    sock.sendto(message.encode(), playing[data['player']])
+                    sock.sendto(message.encode(), playing_seats[playing[player]])
                     print(f"Next minigame for {data['player']} is {game}. Entering minigame")
                 message = json.dumps({'type':Type.CREATE.value, 'players':data['players']})
                 sock.sendto(message.encode(), unico_juego2)
                 
 
 def countdown():
-    global pending, playing, groups
+    global pending, playing, groups, pending_seats, playing_seats
     while True:
         while(get_remaining_time() > 0 or len(playing) > 0 or len(pending) == 0):
             pass
@@ -148,7 +204,7 @@ def countdown():
         games_list = list(filter(match_biome, games_list))
         games_list = games_list[:len(route)]
         print(list(pending.keys()))
-        player_group, groups = cluster.cluster(list(pending.keys()))
+        player_group, groups = cluster.cluster(list(pending.values()))
         for group in groups:
             for player in groups[group]:
                 playing_progress[player] = deque(games_list)
@@ -156,13 +212,23 @@ def countdown():
 
         playing = pending.copy()
         pending = {}
+        playing_seats = pending_seats.copy()
+        pending_seats = {}
         for group in groups:
-            message = json.dumps({'type':Type.CREATE.value, 'players':groups[group]})
+            group_ip = list(map(lambda x: playing_seats[x][0], groups[group]))
+            message = json.dumps({'type':Type.CREATE.value, 'players':group_ip})
             sock.sendto(message.encode(), unico_juego1)
 
 def main():
+    global route
     open_socket()
 
+    plane = get_plane()
+    origin, destination = get_flight(plane)
+    route = random.sample(cities, 4)
+    route.append(destination)
+    route[0]=origin
+    print(route)
     p = threading.Thread(target=countdown)
     p.start()
     wait_recv()
