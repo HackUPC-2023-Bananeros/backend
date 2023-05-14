@@ -6,7 +6,7 @@ import threading
 import random
 import cluster
 from collections import deque
-from FlightRadar24.api import FlightRadar24API
+#from FlightRadar24.api import FlightRadar24API
 import sqlite3
 
 
@@ -84,7 +84,7 @@ def get_seat(ip):
         if sqliteConnection:
             sqliteConnection.close()
             print("The SQLite connection is closed")
-        return record
+        return record[0]
 
 unico_juego1 = ('localhost', 7000)
 unico_juego2 = ('localhost', 7005)
@@ -130,7 +130,7 @@ playing_seats = {}
 
 
 now = datetime.now().timestamp() * 1000
-start_time = now + 1*60*1000
+start_time = now + 1*20*1000
 
 def get_remaining_time():
     now = datetime.now().timestamp() * 1000
@@ -149,13 +149,13 @@ def send_start_game(seat):
     game = playing_progress[seat].pop()
     game = Games.SEA_BOMBS
     if game == Games.SEA_BOMBS:
-            message = json.dumps({'game':str(Games.SEA_BOMBS.value), 'direction':str(groups[group].index(seat))})
+            message = json.dumps({'game':str(Games.SEA_BOMBS.value), 'direction':str(groups[group].index(seat)), 'group': group})
             sock.sendto(message.encode(), pending_seats[seat])
 
 
 def open_socket():
     # Bind the socket to a specific IP address and port
-    server_address = ('localhost', 7008)
+    server_address = ('0.0.0.0', 7008)
 
     sock.bind(server_address)
 
@@ -166,13 +166,13 @@ def wait_recv():
         data, address = sock.recvfrom(4096)
         data = json.loads(data.decode())
         if data['type'] == Type.CONNECT.value:
-            print(f"Recieved connection from seat {data['seat']}, Registerd player in queue for next game")
-            pending[data[address[0]]] = get_seat(address[0])
-            pending_seats[pending[data[address[0]]]] = address
-            print(list(pending.keys()))
+            pending[address[0]] = get_seat(address[0])
+            print(pending[address[0]])
+            pending_seats[get_seat(address[0])] = address
+            print(f"Recieved connection from seat {pending[address[0]]}, Registerd player in queue for next game")
             message = json.dumps({'time':str(get_remaining_time())})
             sock.sendto(message.encode(), address)
-            print(f"Sent remaining time to seat {pending[data[address[0]]]}")
+            print(f"Sent remaining time to seat {pending[address[0]]}")
         elif data['type'] == Type.MINIGAME_ENDED.value:
             print(f"{data['players']} ended their previous minigame, looking for the next one")
             #group = find_group(data['players'][0])
@@ -200,14 +200,14 @@ def countdown():
             pass
         now = datetime.now().timestamp() * 1000
         start_time = now + 2*60*1000
-        games_list = list(random.sample(game_categories['four_player'], len(game_categories['four_player']))) + list(random.sample(game_categories['two_player'], len(game_categories['two_player']))) + list(random.sample(game_categories['single_player'], len(game_categories['single_player'])))
-        games_list = list(filter(match_biome, games_list))
-        games_list = games_list[:len(route)]
-        print(list(pending.keys()))
+        # games_list = list(random.sample(game_categories['four_player'], len(game_categories['four_player']))) + list(random.sample(game_categories['two_player'], len(game_categories['two_player']))) + list(random.sample(game_categories['single_player'], len(game_categories['single_player'])))
+        # games_list = list(filter(match_biome, games_list))
+        # games_list = games_list[:len(route)]
+        # print(list(pending.keys()))
         player_group, groups = cluster.cluster(list(pending.values()))
         for group in groups:
             for player in groups[group]:
-                playing_progress[player] = deque(games_list)
+                # playing_progress[player] = deque(games_list)
                 send_start_game(player)
 
         playing = pending.copy()
@@ -223,12 +223,12 @@ def main():
     global route
     open_socket()
 
-    plane = get_plane()
-    origin, destination = get_flight(plane)
-    route = random.sample(cities, 4)
-    route.append(destination)
-    route[0]=origin
-    print(route)
+    # plane = get_plane()
+    # origin, destination = get_flight(plane)
+    # route = random.sample(cities, 4)
+    # route.append(destination)
+    # route[0]=origin
+    # print(route)
     p = threading.Thread(target=countdown)
     p.start()
     wait_recv()
